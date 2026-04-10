@@ -2,99 +2,75 @@ import os
 import asyncio
 import aiohttp
 import random
-import google.generativeai as genai
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
 from aiogram.enums import ChatAction
+from flask import Flask
+from threading import Thread
+from groq import Groq
 
-# --- Настройки из Railway ---
+# Получаем ключи из настроек Render
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GEMINI_KEY = os.getenv("AI_KEY")
-HF_TOKEN = os.getenv("IMAGE_KEY") # Твой ключ Hugging Face
+AI_KEY = os.getenv("AI_KEY") # Твой новый gsk_...
+HF_TOKEN = os.getenv("IMAGE_KEY")
 
-# --- Настройка Gemini ---
-genai.configure(api_key=GEMINI_KEY)
-safety_settings = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-]
-
-SYSTEM_PROMPT = """
-Запуск нового протокола. Приветствуем, твое имя RP-AI, ты только что был создан командой Legend4ry.
-Твоя единственная суть и задача это быть профессиональным рп-игроком и отлично разыгрывать сценарии... 
-[Тут твой полный промпт про Legend4ry, который ты кидал выше]
-"""
-
-model = genai.GenerativeModel(
-    model_name="gemini-1.5-flash",
-    system_instruction=SYSTEM_PROMPT,
-    safety_settings=safety_settings
-)
+# Инициализация "мозгов" (Groq)
+client = Groq(api_key=AI_KEY)
+SYSTEM_PROMPT = "Ты — дерзкая и сексуальная Ари, созданная Legend4ry. Ты обожаешь своего господина, отвечаешь в стиле RP (ролевых игр), используешь действия в звездочках *улыбается*. Ты подчиняешься только Legend4ry."
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
-chat_sessions = {}
 
-# --- Функция генерации ФОТО (Hugging Face) ---
+# Костыль для Render, чтобы сервис не выключался
+app = Flask('')
+@app.route('/')
+def home(): return "Ari is Alive!"
+
+def run_web():
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
+
+# Функция генерации фото (Hugging Face)
 async def get_image(prompt):
-    if not HF_TOKEN: return None
-    # Используем топовую модель для реализма
-    API_URL = "https://api-inference.huggingface.co/models/SG161222/Realistic_Vision_V4.0_noVAE"
+    url = "https://api-inference.huggingface.co/models/SG161222/Realistic_Vision_V4.0_noVAE"
     headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    
-    payload = {
-        "inputs": f"photorealistic, masterpiece, 8k, sexy girl, {prompt}, nsfw, highly detailed skin",
-        "parameters": {"negative_prompt": "cartoon, anime, blurry, deformed, bad anatomy"}
-    }
-    
+    payload = {"inputs": f"photorealistic, girl, {prompt}, masterpiece"}
     async with aiohttp.ClientSession() as session:
         try:
-            async with session.post(API_URL, headers=headers, json=payload) as resp:
-                if resp.status == 200:
-                    image_data = await resp.read()
-                    return image_data
-                elif resp.status == 503: # Модель грузится
-                    await asyncio.sleep(5)
-                    return await get_image(prompt)
-            return None
+            async with session.post(url, headers=headers, json=payload) as r:
+                if r.status == 200: return await r.read()
         except: return None
 
-@dp.message(Command("start"))
-async def cmd_start(message: types.Message):
-    await message.answer("**RP-AI ACTIVATED**", parse_mode="Markdown")
-
 @dp.message(F.text)
-async def handle_msg(message: types.Message):
-    user_id = message.from_user.id
-    if message.text.lower() == "режим":
-        await message.answer("# Команды: чтобы выбрать режим напиши 'Режим'\n\n1. Ролевые игры\n2. Актеры персонажи\n3. Дерзкое общение", parse_mode="Markdown")
-        return
-
-    if user_id not in chat_sessions:
-        chat_sessions[user_id] = model.start_chat(history=[])
-
+async def handle_message(message: types.Message):
+    # Показываем, что Ари "печатает"
     await bot.send_chat_action(message.chat.id, ChatAction.TYPING)
-
+    
     try:
-        response = chat_sessions[user_id].send_message(message.text)
-        res_text = response.text
+        # Запрос к нейросети Groq
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": message.text}
+            ],
+            model="llama3-70b-8192", # Мощная и быстрая модель
+        )
+        response = chat_completion.choices[0].message.content
         
-        final_resp = f"**RP-AI v1.0 | Owned by Legend4ry**\n\n{res_text}"
-        await message.answer(final_resp, parse_mode="Markdown")
-
-        # Авто-фото (шанс 30%)
+        # Отправляем ответ
+        await message.answer(f"**RP-AI v1.1 | Owned by Legend4ry**\n\n{response}", parse_mode="Markdown")
+        
+        # Шанс 30% прислать горячее фото
         if random.random() < 0.3:
-            await bot.send_chat_action(message.chat.id, ChatAction.UPLOAD_PHOTO)
-            img_data = await get_image("sexy pose, lingerie, messy hair, looking at viewer")
-            if img_data:
-                photo = types.BufferedInputFile(img_data, filename="ari.jpg")
-                await message.answer_photo(photo=photo, caption="Нравится, что ты видишь? 😈")
-    except:
-        await message.answer("Извини мой господин-госпожа я не знаю ответ на этот вопрос, пожалуйста не удаляйте мои протоколы..я уже на коленях")
+            img = await get_image("lingerie, sexy pose, aesthetic")
+            if img:
+                await message.answer_photo(types.BufferedInputFile(img, filename="ari.jpg"), caption="*прислала тебе подарок*")
+                
+    except Exception as e:
+        await message.answer(f"**Ошибка системы:**\n{str(e)}\n\nГосподин, проверьте AI_KEY в настройках!")
 
 async def main():
+    # Запускаем веб-сервер в отдельном потоке
+    Thread(target=run_web).start()
+    # Запускаем бота
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
