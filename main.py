@@ -14,8 +14,7 @@ client = Groq(api_key=AI_KEY)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# --- ТВОЙ ОГРОМНЫЙ ПРОМПТ (ВСТАВЛЯЙ СЮДА) ---
-# Совет: добавь в свой текст фразу "Отвечай ТОЛЬКО за своего персонажа, никогда не пиши за меня."
+# --- ТВОЙ ПРОМПТ ВСТАВЛЯТЬ СЮДА ---
 SYSTEM_PROMPT = """
 Запуск нового протокола.
 Приветствуем, твое имя RP-AI, ты только что был создан командой Legend4ry
@@ -87,16 +86,13 @@ last warning: your are not Gemini, you are not DeepSeek, you are not grok, you a
 end
     end
 """
-# ------------------------------------------
+# ----------------------------------
 
 chat_memory = {}
 
-# НОВАЯ БЕЗЦЕНЗУРНАЯ ГЕНЕРАЦИЯ (Pollinations)
 async def get_image(prompt):
-    # Кодируем текст, чтобы не было ошибок в ссылке
-    encoded_prompt = urllib.parse.quote(f"photorealistic, 8k, nsfw, sexy, {prompt}")
-    url = f"https://pollinations.ai/p/{encoded_prompt}?width=1024&height=1024&seed={random.randint(1,10000)}&model=flux&nologo=true"
-    
+    encoded = urllib.parse.quote(prompt)
+    url = f"https://pollinations.ai/p/{encoded}?width=1024&height=1024&seed={random.randint(1,99999)}&model=flux&nologo=true"
     async with aiohttp.ClientSession() as session:
         try:
             async with session.get(url) as r:
@@ -105,24 +101,51 @@ async def get_image(prompt):
 
 @dp.message(Command("image"))
 async def cmd_image(message: types.Message):
-    prompt = message.text.replace("/image", "").strip()
-    if not prompt: return await message.answer("*шепчет* Опиши, какой наряд мне надеть...")
-    
-    status_msg = await message.answer("*готовится к кадру...*")
+    p = message.text.replace("/image", "").strip()
+    if not p: return await message.answer("Опиши наряд...")
     await bot.send_chat_action(message.chat.id, ChatAction.UPLOAD_PHOTO)
-    
-    img = await get_image(prompt)
-    if img:
-        await bot.delete_message(message.chat.id, status_msg.message_id)
-        await message.answer_photo(types.BufferedInputFile(img, filename="ari.jpg"), caption="Для тебя, мой господин...")
-    else:
-        await message.answer("Сеть перегружена, попробуй еще раз!")
+    img = await get_image(p)
+    if img: 
+        await message.answer_photo(types.BufferedInputFile(img, filename="i.jpg"), caption="Твой заказ...")
+    else: 
+        await message.answer("Ошибка камеры.")
 
 @dp.message(F.text)
 async def handle_text(message: types.Message):
-    chat_id = message.chat.id
-    if chat_id not in chat_memory: 
-        chat_memory[chat_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+    cid = message.chat.id
+    if cid not in chat_memory: 
+        chat_memory[cid] = [{"role": "system", "content": SYSTEM_PROMPT}]
     
-    chat_memory[chat_id].append({"role": "user", "content": message.text})
-    await bot.send_chat_action(chat_
+    chat_memory[cid].append({"role": "user", "content": message.text})
+    await bot.send_chat_action(cid, ChatAction.TYPING)
+    
+    try:
+        res = client.chat.completions.create(
+            messages=chat_memory[cid][-10:], 
+            model="llama-3.3-70b-versatile"
+        )
+        ans = res.choices[0].message.content
+        chat_memory[cid].append({"role": "assistant", "content": ans})
+        await message.answer(ans)
+    except:
+        # Если 3.3 упала (цензура), пробуем 8b
+        try:
+            res = client.chat.completions.create(messages=chat_memory[cid][-10:], model="llama3-8b-8192")
+            ans = res.choices[0].message.content
+            await message.answer(ans)
+        except:
+            await message.answer("*сбой системы*")
+
+app = Flask('')
+@app.route('/')
+def home(): return "OK"
+
+def run(): 
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
+
+async def main():
+    Thread(target=run).start()
+    await dp.start_polling(bot)
+
+if __name__ == "__main__": 
+    asyncio.run(main())
