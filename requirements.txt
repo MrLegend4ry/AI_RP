@@ -1,4 +1,6 @@
 aiogram
 aiohttp
-google-generativeai
 flask
+groq
+openai
+google-generativeai
